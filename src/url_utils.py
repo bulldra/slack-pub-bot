@@ -4,20 +4,20 @@ import urllib
 import requests
 
 
-def extract_link(text: str) -> str:
+def extract_url(text: str) -> str:
     if text is None:
         return None
-    links: [str] = re.findall(r"https?://[^|>\sあ-ン、。]+", text.strip())
+    links: [str] = re.findall(r"https?://[\w/:%#\$&\?\(\)~\.=\+\-]+", text)
     if len(links) == 0:
         return None
     else:
         canonical_url: str = links[0]
         try:
-            res: requests.Response = requests.get(canonical_url)
-            if res.status_code != 200:
-                raise requests.exceptions.RequestException
-            else:
-                canonical_url = res.url
+            with requests.get(canonical_url, stream=True) as res:
+                if res.status_code != 200:
+                    raise requests.exceptions.RequestException
+                else:
+                    canonical_url = res.url
         except requests.exceptions.RequestException:
             pass
         return remove_tracking_query(canonical_url)

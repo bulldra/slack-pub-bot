@@ -23,7 +23,6 @@ logger.setLevel(logging.DEBUG)
 app: slack_bolt.App = slack_bolt.App(
     token=SECRETS.get("SLACK_BOT_TOKEN"),
     signing_secret=SECRETS.get("SLACK_SIGNING_SECRET"),
-    process_before_response=True,
     request_verification_enabled=True,
 )
 
@@ -68,7 +67,7 @@ def handle_message(context, message):
         logger.debug(f"channel_id: {channel_id}, message: {message}")
         text: str = message["text"]
         ts: str = message["ts"]
-        link: str = url_utils.extract_link(text)
+        link: str = url_utils.extract_url(text)
         if link is not None:
             pub_command("/summarize", link, channel_id=channel_id, ts=ts)
 

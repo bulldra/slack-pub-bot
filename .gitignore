@@ -3,3 +3,4 @@ secrets.json
 .pytest_cache
 __pycache__/
 venv/
+deploy.sh
