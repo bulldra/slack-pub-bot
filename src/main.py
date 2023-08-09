@@ -3,16 +3,17 @@ import logging
 import os
 import re
 
+import flask
 import functions_framework
 import google.cloud.logging
 import slack_bolt
-from flask import Request
 from google.cloud import pubsub_v1
 from slack_bolt.adapter.google_cloud_functions import SlackRequestHandler
 
 import url_utils
 
 SECRETS: dict = json.loads(os.getenv("SECRETS"))
+GCP_PROJECT_ID = SECRETS.get("GCP_PROJECT_ID")
 
 
 logging_client: google.cloud.logging.Client = google.cloud.logging.Client()
@@ -27,68 +28,99 @@ app: slack_bolt.App = slack_bolt.App(
 )
 
 
-def pub_command(command, text, channel_id=None, ts=None, response_url=None):
-    message = {
-        "command": command,
-        "text": text,
-        "channel_id": channel_id,
-        "ts": ts,
-        "response_url": response_url,
-    }
-    publisher = pubsub_v1.PublisherClient()
-    GCP_PROJECT_ID = SECRETS.get("GCP_PROJECT_ID")
+def pub_command(command: str, messages: [dict], arguments: dict):
     if GCP_PROJECT_ID is None:
         raise ValueError("GCP_PROJECT_ID environment variable must be set.")
+    publisher = pubsub_v1.PublisherClient()
     topic_path = publisher.topic_path(GCP_PROJECT_ID, "slack-ai-chat")
     publisher.publish(
         topic_path,
-        data=json.dumps(message).encode("utf-8"),
+        data=json.dumps(
+            {
+                "command": command,
+                "messages": messages,
+                "arguments": arguments,
+            }
+        ).encode("utf-8"),
     )
 
 
-@app.command("/summarize")
-@app.command("/wikipedia")
-@app.command("/gpt")
-def command_preprocessing(ack, body, say, message):
-    ack()
-    command = body["command"]
-    text = body["text"]
-    logger.debug(f"command: {command} text: {text}")
-    response_url = body["response_url"]
-    text = re.sub("<@[a-zA-Z0-9]{11}>", "", text)
-    say(f"{command} {text}")
-    pub_command(command, text, response_url=response_url)
+@app.event("app_mention")
+def mention(event):
+    logger.debug(f"event: {event}")
+    messages: [dict] = [{"role": "user", "content": event["text"]}]
+    arguments: dict = {
+        "channel_id": event["channel"],
+        "thread_ts": event["ts"],
+    }
+    pub_command("/gpt", messages, arguments)
 
 
-@app.message(re.compile(".*https?://.+"))
-def handle_message(context, message):
-    channel_id: str = context.channel_id
-    if channel_id == SECRETS.get("SHARE_CHANNEL_ID"):
-        logger.debug(f"channel_id: {channel_id}, message: {message}")
+def handle_thread(context, message):
+    logger.debug(f"event: {message}")
+    thread_ts: str = message["thread_ts"]
+    replies: dict = app.client.conversations_replies(
+        channel=context.channel_id, ts=thread_ts
+    )
+    if replies is None:
+        return
+
+    reply_messages = replies["messages"]
+    if context.bot_user_id not in reply_messages[0]["reply_users"]:
+        return
+
+    messages: [dict] = []
+    for r in sorted(reply_messages, key=lambda x: x["ts"]):
+        role: str = "user"
+        if context.bot_user_id == r["user"]:
+            role = "assistant"
+        messages.append({"role": role, "content": r["text"].strip()})
+    arguments = {
+        "channel_id": context.channel_id,
+        "thread_ts": thread_ts,
+    }
+    pub_command("/gpt", messages, arguments)
+
+
+def handle_url_message(context, message):
+    logger.debug(f"event: {message}")
+    if context.channel_id == SECRETS.get("SHARE_CHANNEL_ID"):
+        logger.debug(f"channel_id: {context.channel_id}, message: {message}")
         text: str = message["text"]
         ts: str = message["ts"]
         link: str = url_utils.extract_url(text)
         if link is not None:
-            pub_command("/summarize", link, channel_id=channel_id, ts=ts)
+            messages = [{"role": "user", "content": link}]
+            arguments = {
+                "channel_id": context.channel_id,
+                "thread_ts": ts,
+            }
+            pub_command("/summarize", messages, arguments)
 
 
+@app.message()
+def handle_main(context, message):
+    if message.get("thread_ts") is not None:
+        return handle_thread(context, message)
+    elif re.match(r".*https?://.*", message.get("text")):
+        return handle_url_message(context, message)
+    else:
+        return None
+
+
+@app.event({"type": "message", "subtype": "bot_message"})
 @app.event({"type": "message", "subtype": "message_changed"})
-def log_message_change(logger, event):
-    logger.info(f"message changed {event}")
-
-
 @app.event({"type": "message", "subtype": "message_deleted"})
-def log_message_deleted(logger, event):
-    logger.info(f"message deleted {event}")
+def bot_message_change(event):
+    pass
 
 
 @functions_framework.http
-def main(request: Request):
+def main(request: flask.Request):
     if request.method != "POST":
-        return "Only POST requests are accepted", 405
-
+        return ("Only POST requests are accepted", 405)
     if request.headers.get("x-slack-retry-num"):
-        return "No need to resend", 200
+        return ("No need to resend", 200)
 
     content_type: str = request.headers.get("Content-Type")
     if content_type == "application/json":
