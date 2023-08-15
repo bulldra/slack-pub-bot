@@ -3,3 +3,5 @@ functions-framework==3.4.0
 google-cloud-logging==3.5.0
 google-cloud-pubsub==2.17.1
 slack_bolt==1.18.0
+beautifulsoup4==4.12.2
+requests==2.31.0
