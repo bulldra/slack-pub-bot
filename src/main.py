@@ -1,6 +1,7 @@
 """
 Slackからのイベント処理を行うためのサーバレス関数
 """
+import collections
 import json
 import logging
 import os
@@ -10,9 +11,14 @@ import functions_framework
 import google.cloud.logging
 import slack_bolt
 from google.cloud import pubsub_v1
-from slack_bolt.adapter.google_cloud_functions import SlackRequestHandler
 
-import slack_link_utils
+import common.scraping_utils as scraping_utils
+import common.slack_gcf_handler as handler
+import common.slack_link_utils as link_utils
+
+Chat = collections.namedtuple("Chat", ("role", "content"))
+Chat.__new__.__defaults__ = ("user", None)
+
 
 SECRETS: dict = json.loads(os.getenv("SECRETS"))
 GCP_PROJECT_ID = SECRETS.get("GCP_PROJECT_ID")
@@ -32,57 +38,58 @@ app: slack_bolt.App = slack_bolt.App(
 
 @app.event({"type": "message", "subtype": "message_changed"})
 @app.event({"type": "message", "subtype": "message_deleted"})
-def bot_message_change():
-    """
-    メッセージイベントがあった場合の処理
-    """
+def bot_message_change() -> None:
+    """メッセージイベントがあっても何もしない"""
 
 
 @app.message()
-def handle_message(context, message):
+def handle_message(context, message) -> None:
     """
     メッセージが送信された場合の処理
     起動条件のみを判定して、コマンドの選択は後続に移譲する
     """
-    bot_user_id: str = context.bot_user_id
     if message.get("thread_ts") is not None:
-        handle_thread(bot_user_id, message)
+        handle_thread(context.bot_user_id, message)
     elif context.channel_id == SHARE_CHANNEL_ID:
         handle_share(message)
 
 
 @app.event("app_mention")
-def mention(context, event):
+def mention(context, event) -> None:
     """
     BOTに対してメンションがされた場合の処理
     コマンドの選択は後続に移譲する
     """
-    channel: str = event.get("channel")
-    timestamp: str = event.get("ts")
     text: str = event.get("text")
-    text = text.replace(f"<@{context.bot_user_id}>", "").strip()
-    messages: [dict] = [{"role": "user", "content": text}]
-    handle_placeholder(channel, timestamp, messages)
+    if text is not None:
+        text = text.replace(f"<@{context.bot_user_id}>", "").strip()
+        pub_command(
+            channel=event.get("channel"),
+            thread_ts=event.get("ts"),
+            chat_history=[Chat(content=text)],
+        )
 
 
 @app.command("/gpt")
 @app.command("/summazise")
-def handle_command(ack, command, say):
+def handle_command(ack, command, say) -> None:
     """
     Slackのコマンドが実行された場合の処理
-    最初にコマンド自体をSlackに送信しておき、そのメッセージに対するスレッド処理とする
+    コマンドをメッセージとしてSlackにPOSTしておき、そのメッセージに対するスレッド処理とする
     """
     ack()
     command_name: str = command.get("command")
     text: str = command.get("text")
     res = say(f"{command_name} {text}")
-    messages: [dict] = [{"role": "user", "content": text}]
-    channel: str = res.get("channel")
-    timestamp: str = res.get("ts")
-    handle_placeholder(channel, timestamp, messages, command=command_name)
+    pub_command(
+        command=command_name,
+        channel=res.get("channel"),
+        thread_ts=res.get("ts"),
+        chat_history=[Chat(content=text)],
+    )
 
 
-def handle_thread(bot_user_id, message):
+def handle_thread(bot_user_id, message) -> None:
     """
     スレッドリプライされている場合の処理
     BOTがスレッド内にいればBOTが返信する
@@ -93,82 +100,80 @@ def handle_thread(bot_user_id, message):
         channel=channel,
         ts=thread_ts,
     )
-    if replies is None:
-        return
 
-    reply_messages = replies.get("messages")
-    logger.debug(reply_messages)
-    if (
-        reply_messages is not None
-        and len(reply_messages) > 0
-        and reply_messages[0].get("reply_users") is not None
-        and bot_user_id not in reply_messages[0].get("reply_users")
-    ):
-        return
+    if replies is not None:
+        reply_messages = replies.get("messages")
+        reply_users = reply_messages[0].get("reply_users")
+        logger.debug(reply_messages)
+        if reply_users is not None and bot_user_id in reply_users:
+            chat_history: [Chat] = [
+                Chat(
+                    role="assistant"
+                    if reply.get("user") == bot_user_id or reply.get("bot_id")
+                    else "user",
+                    content=reply.get("text"),
+                )
+                for reply in sorted(reply_messages, key=lambda x: x["ts"])
+            ]
+            logger.debug(chat_history)
+            pub_command(
+                channel=channel,
+                thread_ts=thread_ts,
+                chat_history=chat_history,
+            )
 
-    messages: [dict] = []
-    for reply in sorted(reply_messages, key=lambda x: x["ts"]):
-        role: str = "user"
-        user_id = reply.get("user") or reply.get("bot_id")
-        if user_id == bot_user_id or reply.get("bot_id"):
-            role = "assistant"
-        text: str = reply.get("text")
-        messages.append({"role": role, "content": text})
-    handle_placeholder(channel, thread_ts, messages)
 
-
-def handle_share(message):
+def handle_share(message) -> None:
     """
-    シェアチャンネルにリンクがシェアされた場合の処理
+    シェアチャンネルに投稿があった場合の処理
     """
-    channel: str = message.get("channel")
-    timestamp: str = message.get("ts")
     text: str = message.get("text")
-    if slack_link_utils.is_contains_url(text):
-        url: str = slack_link_utils.extract_and_remove_tracking_url(text)
-        if url is None or not slack_link_utils.is_allow_scraping(url):
-            return
-        else:
-            messages: [dict] = [{"role": "user", "content": url}]
-            handle_placeholder(channel, timestamp, messages, command="/summazise")
+    if link_utils.is_contains_url(text):
+        url: str = link_utils.extract_and_remove_tracking_url(text)
+        if scraping_utils.is_allow_scraping(url):
+            pub_command(
+                channel=message.get("channel"),
+                thread_ts=message.get("ts"),
+                chat_history=[Chat(content=url)],
+            )
 
 
-def handle_placeholder(
-    channel: str, thread_ts: str, messages: str, command: str = None
-):
+def pub_command(
+    command: str = None,
+    channel: str = None,
+    thread_ts: str = None,
+    chat_history: [Chat] = None,
+) -> None:
     """
-    最初にスレッドにメッセージを返信しておき、そのメッセージを後続で処理対象とする
+    該当メッセージにスレッドリプライを行い、そのリプライを後続で処理対象とする
     """
 
-    if messages is None or len(messages) == 0:
-        return
+    if GCP_PROJECT_ID is None:
+        raise ValueError("GCP_PROJECT_ID environment variable must be set.")
+    if thread_ts is None or channel is None:
+        raise ValueError("thread_ts and channel must be set.")
+    if chat_history is None or len(chat_history) == 0:
+        raise ValueError("chat_history must be set.")
+
     res = app.client.chat_postMessage(
         channel=channel,
         thread_ts=thread_ts,
-        text="処理中.",
+        text="(Processing.)",
     )
     if res.get("ok") is not True:
         raise ValueError("Failed to post message.")
-    timestamp: str = res.get("ts")
-    arguments: dict = {"channel": channel, "ts": timestamp}
-    pub_command(command, arguments, messages)
 
-
-def pub_command(command: str, arguments: dict, messages: [dict]):
-    """
-    コマンドの種類や引数を後続処理に Pub/Sub で通知する
-    """
-    if GCP_PROJECT_ID is None:
-        raise ValueError("GCP_PROJECT_ID environment variable must be set.")
-    publisher = pubsub_v1.PublisherClient()
-    topic_path = publisher.topic_path(GCP_PROJECT_ID, "slack-ai-chat")
+    publisher: pubsub_v1.PublisherClient = pubsub_v1.PublisherClient()
     publisher.publish(
-        topic_path,
+        publisher.topic_path(GCP_PROJECT_ID, "slack-ai-chat"),
         data=json.dumps(
             {
-                "command": command,
-                "arguments": arguments,
-                "messages": messages,
+                "context": {
+                    "command": command,
+                    "channel": channel,
+                    "ts": res.get("ts"),
+                },
+                "chat_history": [chat._asdict() for chat in chat_history],
             }
         ).encode("utf-8"),
     )
@@ -176,24 +181,5 @@ def pub_command(command: str, arguments: dict, messages: [dict]):
 
 @functions_framework.http
 def main(request: flask.Request):
-    """
-    Functionsのエントリーポイント
-    """
-    if request.method != "POST":
-        return ("Only POST requests are accepted", 405)
-    if request.headers.get("x-slack-retry-num"):
-        return ("No need to resend", 200)
-
-    content_type: str = request.headers.get("Content-Type")
-    if content_type == "application/json":
-        body: dict = request.get_json()
-        if body.get("type") == "url_verification":
-            headers: dict = {"Content-Type": "application/json"}
-            res: str = json.dumps({"challenge": body.get("challenge")})
-            return (res, 200, headers)
-        else:
-            return SlackRequestHandler(app).handle(request)
-    elif content_type == "application/x-www-form-urlencoded":
-        return SlackRequestHandler(app).handle(request)
-    else:
-        return ("Bad Request", 400)
+    """Functionsのエントリーポイント"""
+    return handler.handle(request, app)
