@@ -80,7 +80,10 @@ def handle_command(ack, command, say) -> None:
     ack()
     command_name: str = command.get("command")
     text: str = command.get("text")
-    res = say(f"{command_name} {text}")
+    message = command_name
+    if text is not None:
+        message += f" {text}"
+    res = say(message)
     pub_command(
         command=command_name,
         channel=res.get("channel"),
@@ -155,10 +158,11 @@ def pub_command(
     if chat_history is None or len(chat_history) == 0:
         raise ValueError("chat_history must be set.")
 
+    prosessing_message: str = "Processing."
     res = app.client.chat_postMessage(
         channel=channel,
         thread_ts=thread_ts,
-        text="(Processing.)",
+        text=prosessing_message,
     )
     if res.get("ok") is not True:
         raise ValueError("Failed to post message.")
@@ -172,6 +176,8 @@ def pub_command(
                     "command": command,
                     "channel": channel,
                     "ts": res.get("ts"),
+                    "thread_ts": thread_ts,
+                    "processing_message": prosessing_message,
                 },
                 "chat_history": [chat._asdict() for chat in chat_history],
             }

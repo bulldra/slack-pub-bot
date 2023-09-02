@@ -8,7 +8,7 @@ gcloud functions deploy ${FUNCTION_NAME} \
 	--allow-unauthenticated \
 	--timeout=3s \
 	--min-instances=1 \
-	--max-instances=10 \
+	--max-instances=30 \
 	--memory=256Mi \
 	--source=src/ \
 	--entry-point=main \

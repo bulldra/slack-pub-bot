@@ -130,7 +130,7 @@ def convert_mrkdwn(markdown_text: str) -> str:
     """convert markdown to mrkdwn"""
 
     # コードブロックエスケープ
-    replacement = "!!!CODE_BLOCK!!!"
+    replacement = "!!!CODE_BLOCK!!!\n"
     code_blocks = re.findall(
         r"[^`]```([^`].+?[^`])```[^`]",
         markdown_text,
@@ -143,12 +143,20 @@ def convert_mrkdwn(markdown_text: str) -> str:
         flags=re.DOTALL,
     )
 
+    # コード
+    markdown_text = re.sub(r"`(.+?)`", r" `\1` ", markdown_text)
+
     # リスト・数字リストも・に変換
     markdown_text = re.sub(
-        r"^\s*[\*\+-]\s+(.*)\n",
+        r"^\s*[\*\+-]\s+(.+?)\n",
         r"• \1\n",
         markdown_text,
         flags=re.MULTILINE,
+    )
+    markdown_text = re.sub(
+        r"\n\s*[\*\+-]+\s+(.+?)$",
+        r"\n• \1\n",
+        markdown_text,
     )
 
     # イタリック
@@ -165,12 +173,24 @@ def convert_mrkdwn(markdown_text: str) -> str:
         markdown_text,
     )
 
+    # 打ち消し
+    markdown_text = re.sub(
+        r"~~(.+?)~~",
+        r"~\1~",
+        markdown_text,
+    )
+
     # 見出し
     markdown_text = re.sub(
         r"^#{1,6}\s*(.+?)\n",
         r"*\1*\n",
         markdown_text,
         flags=re.MULTILINE,
+    )
+    markdown_text = re.sub(
+        r"\n#{1,6}\s*(.+?)$",
+        r"\n*\1*",
+        markdown_text,
     )
 
     # リンク
