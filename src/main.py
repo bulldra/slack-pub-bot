@@ -1,6 +1,4 @@
-"""
-Slackからのイベント処理を行うためのサーバレス関数
-"""
+"""Slackからのイベント処理を行うためのサーバレス関数"""
 import collections
 import json
 import logging
@@ -13,16 +11,14 @@ import slack_bolt
 from google.cloud import pubsub_v1
 
 import common.scraping_utils as scraping_utils
-import common.slack_gcf_handler as handler
-import common.slack_link_utils as link_utils
+import common.slack_gcf_handler as slack_gcf_handler
+import common.slack_link_utils as slack_link_utils
 
 Chat = collections.namedtuple("Chat", ("role", "content"))
 Chat.__new__.__defaults__ = ("user", None)
 
 
 SECRETS: dict = json.loads(os.getenv("SECRETS"))
-GCP_PROJECT_ID = SECRETS.get("GCP_PROJECT_ID")
-SHARE_CHANNEL_ID = SECRETS.get("SHARE_CHANNEL_ID")
 
 logging_client: google.cloud.logging.Client = google.cloud.logging.Client()
 logging_client.setup_logging()
@@ -44,22 +40,17 @@ def bot_message_change() -> None:
 
 @app.message()
 def handle_message(context, message) -> None:
-    """
-    メッセージが送信された場合の処理
-    起動条件のみを判定して、コマンドの選択は後続に移譲する
-    """
+    """メッセージが送信された場合の処理。起動条件のみを判定して、コマンドの選択は後続に移譲"""
+    share_cannel_id: str = SECRETS.get("SHARE_CHANNEL_ID")
     if message.get("thread_ts") is not None:
         handle_thread(context.bot_user_id, message)
-    elif context.channel_id == SHARE_CHANNEL_ID:
+    elif context.channel_id == share_cannel_id:
         handle_share(message)
 
 
 @app.event("app_mention")
 def mention(context, event) -> None:
-    """
-    BOTに対してメンションがされた場合の処理
-    コマンドの選択は後続に移譲する
-    """
+    """BOTに対してメンションがされた場合の処理。コマンドの選択は後続に移譲"""
     text: str = event.get("text")
     if text is not None:
         text = text.replace(f"<@{context.bot_user_id}>", "").strip()
@@ -75,7 +66,7 @@ def mention(context, event) -> None:
 def handle_command(ack, command, say) -> None:
     """
     Slackのコマンドが実行された場合の処理
-    コマンドをメッセージとしてSlackにPOSTしておき、そのメッセージに対するスレッド処理とする
+    コマンドをメッセージとしてSlackにPOSTし、そのメッセージに対するスレッド処理とする
     """
     ack()
     command_name: str = command.get("command")
@@ -93,10 +84,7 @@ def handle_command(ack, command, say) -> None:
 
 
 def handle_thread(bot_user_id, message) -> None:
-    """
-    スレッドリプライされている場合の処理
-    BOTがスレッド内にいればBOTが返信する
-    """
+    """スレッドリプライされている場合の処理。BOTがスレッド内にいればBOTが返信する"""
     channel: str = message.get("channel")
     thread_ts: str = message.get("thread_ts")
     replies: dict = app.client.conversations_replies(
@@ -107,7 +95,6 @@ def handle_thread(bot_user_id, message) -> None:
     if replies is not None:
         reply_messages = replies.get("messages")
         reply_users = reply_messages[0].get("reply_users")
-        logger.debug(reply_messages)
         if reply_users is not None and bot_user_id in reply_users:
             chat_history: [Chat] = [
                 Chat(
@@ -118,7 +105,6 @@ def handle_thread(bot_user_id, message) -> None:
                 )
                 for reply in sorted(reply_messages, key=lambda x: x["ts"])
             ]
-            logger.debug(chat_history)
             pub_command(
                 channel=channel,
                 thread_ts=thread_ts,
@@ -127,12 +113,10 @@ def handle_thread(bot_user_id, message) -> None:
 
 
 def handle_share(message) -> None:
-    """
-    シェアチャンネルに投稿があった場合の処理
-    """
+    """シェアチャンネルにスクレイピング可能なURLの投稿があった場合には処理対象とする"""
     text: str = message.get("text")
-    if link_utils.is_contains_url(text):
-        url: str = link_utils.extract_and_remove_tracking_url(text)
+    if slack_link_utils.is_contains_url(text):
+        url: str = slack_link_utils.extract_and_remove_tracking_url(text)
         if scraping_utils.is_allow_scraping(url):
             pub_command(
                 channel=message.get("channel"),
@@ -147,12 +131,18 @@ def pub_command(
     thread_ts: str = None,
     chat_history: [Chat] = None,
 ) -> None:
-    """
-    該当メッセージにスレッドリプライを行い、そのリプライを後続で処理対象とする
-    """
-
-    if GCP_PROJECT_ID is None:
+    """該当メッセージにスレッドリプライを行い、そのリプライを後続で処理対象とする"""
+    gcp_project_id: str = SECRETS.get("GCP_PROJECT_ID")
+    if gcp_project_id is None:
         raise ValueError("GCP_PROJECT_ID environment variable must be set.")
+
+    logger.debug(
+        "command: %s, channel:%s, thread_ts:%s\nchat_history:%s",
+        command,
+        channel,
+        thread_ts,
+        chat_history,
+    )
     if thread_ts is None or channel is None:
         raise ValueError("thread_ts and channel must be set.")
     if chat_history is None or len(chat_history) == 0:
@@ -169,7 +159,7 @@ def pub_command(
 
     publisher: pubsub_v1.PublisherClient = pubsub_v1.PublisherClient()
     publisher.publish(
-        publisher.topic_path(GCP_PROJECT_ID, "slack-ai-chat"),
+        publisher.topic_path(gcp_project_id, "slack-ai-chat"),
         data=json.dumps(
             {
                 "context": {
@@ -188,4 +178,4 @@ def pub_command(
 @functions_framework.http
 def main(request: flask.Request):
     """Functionsのエントリーポイント"""
-    return handler.handle(request, app)
+    return slack_gcf_handler.handle(request, app)
