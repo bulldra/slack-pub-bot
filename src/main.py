@@ -40,7 +40,7 @@ def bot_message_change() -> None:
 
 @app.message()
 def handle_message(context, message) -> None:
-    """メッセージが送信された場合の処理。起動条件のみを判定して、コマンドの選択は後続に移譲"""
+    """メッセージが送信された場合の処理。起動条件のみを判定して、コマンドの選択は後続に委譲"""
     share_cannel_id: str = SECRETS.get("SHARE_CHANNEL_ID")
     if message.get("thread_ts") is not None:
         handle_thread(context.bot_user_id, message)
@@ -50,7 +50,7 @@ def handle_message(context, message) -> None:
 
 @app.event("app_mention")
 def mention(context, event) -> None:
-    """BOTに対してメンションがされた場合の処理。コマンドの選択は後続に移譲"""
+    """BOTに対してメンションがされた場合の処理。コマンドの選択は後続に委譲"""
     text: str = event.get("text")
     if text is not None:
         text = text.replace(f"<@{context.bot_user_id}>", "").strip()
