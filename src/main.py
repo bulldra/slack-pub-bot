@@ -137,7 +137,7 @@ def pub_command(
         raise ValueError("GCP_PROJECT_ID environment variable must be set.")
 
     logger.debug(
-        "command: %s, channel:%s, thread_ts:%s\nchat_history:%s",
+        "command: %s, channel: %s, thread_ts: %s\nchat_history: %s",
         command,
         channel,
         thread_ts,
