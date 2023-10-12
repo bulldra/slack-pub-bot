@@ -148,11 +148,20 @@ def pub_command(
     if chat_history is None or len(chat_history) == 0:
         raise ValueError("chat_history must be set.")
 
-    prosessing_message: str = "Processing."
+    prosessing_message: str = "思考中."
+    blocks: list = [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": prosessing_message,
+            },
+        }
+    ]
     res = app.client.chat_postMessage(
         channel=channel,
         thread_ts=thread_ts,
-        text=prosessing_message,
+        blocks=blocks,
     )
     if res.get("ok") is not True:
         raise ValueError("Failed to post message.")
