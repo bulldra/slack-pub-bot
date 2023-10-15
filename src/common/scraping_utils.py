@@ -7,20 +7,18 @@ from collections import namedtuple
 import requests
 from bs4 import BeautifulSoup
 
-Site = namedtuple(
-    "Site", ("url", "title", "description", "keywords", "heading", "content")
-)
+Site = namedtuple("Site", ("url", "title", "heading", "content"))
 
 
 def is_allow_scraping(url: str):
     """スクレイピングできるかどうかの判定"""
 
-    blacklist_domain: [str] = [
+    blacklist_domain: list[str] = [
         "twitter.com",
         "speakerdeck.com",
         "www.youtube.com",
     ]
-    black_list_ext: [str] = [
+    black_list_ext: list[str] = [
         ".pdf",
         ".jpg",
         ".png",
@@ -42,28 +40,14 @@ def is_allow_scraping(url: str):
 
 def scraping(url: str) -> Site:
     """スクレイピングの実施"""
-    res = None
-    try:
-        res = requests.get(url, timeout=(3.0, 8.0))
-    except requests.exceptions.TooManyRedirects:
-        return None
-    except requests.exceptions.RequestException:
-        return None
+    res = requests.get(url, timeout=(3.0, 8.0))
+    if res.status_code != 200:
+        raise ValueError(f"status code is not 200. status code:{res.status_code}")
 
     soup = BeautifulSoup(res.content, "html.parser")
     title = url
     if soup.title is not None and soup.title.string is not None:
         title = re.sub(r"\n", " ", soup.title.string.strip())
-
-    description: str = None
-    meta_discription = soup.find("meta", attrs={"name": "description"})
-    if meta_discription and meta_discription.get("content"):
-        description = meta_discription.get("content")
-
-    keywords: [str] = None
-    meta_keywords = soup.find("meta", attrs={"name": "keywords"})
-    if meta_keywords and meta_keywords.get("content"):
-        keywords = meta_keywords.get("content").split(",")
 
     for script in soup(
         [
@@ -99,7 +83,7 @@ def scraping(url: str) -> Site:
     ):
         cr_tag.insert_after("\n")
 
-    heading: [str] = []
+    heading: list[str] = []
     for cr_tag in soup(
         [
             "h1",
@@ -114,4 +98,4 @@ def scraping(url: str) -> Site:
 
     content: str = re.sub(r"[\n\s]+", "\n", soup.get_text())
 
-    return Site(url, title, description, keywords, heading, content)
+    return Site(url, title, heading, content)

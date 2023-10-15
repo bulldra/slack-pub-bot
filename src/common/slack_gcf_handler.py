@@ -17,7 +17,7 @@ def handle(request: flask.Request, app: slack_bolt.App):
     if request.headers.get("x-slack-retry-num"):
         return ("No need to resend", 200)
 
-    content_type: str = request.headers.get("Content-Type")
+    content_type: str = str(request.headers.get("Content-Type"))
     if content_type == "application/json":
         body: dict = request.get_json()
         if body.get("type") == "url_verification":
