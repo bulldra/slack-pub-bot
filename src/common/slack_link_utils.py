@@ -1,6 +1,3 @@
-"""
-Slackのリンクを扱うためのユーティリティ
-"""
 import collections
 import html
 import re
@@ -12,7 +9,6 @@ _URL_PATTERN: str = r"https?://[a-zA-Z0-9_/:%#\$&;\?\(\)~\.=\+\-]+[^\s\|\>]+"
 
 
 def build_link(url: str, title: str) -> str:
-    """Slackのリンクを生成する"""
     if url is None or url == "":
         return ""
     escaped_url: str = html.escape(url)
@@ -25,7 +21,6 @@ def build_link(url: str, title: str) -> str:
 
 
 def extract_and_remove_tracking_url(text: str) -> str:
-    """リンクを抽出してトラッキングURLを除去する"""
     if text is None or not is_contains_url(text):
         raise ValueError("URLが見つかりませんでした。")
 
@@ -36,16 +31,11 @@ def extract_and_remove_tracking_url(text: str) -> str:
 
 
 def is_contains_url(text: str) -> bool:
-    """URLが含まれているかどうかの判定"""
     links: list[str] = re.findall(_URL_PATTERN, text or "")
     return len(links) > 0
 
 
 def is_only_url(text: str) -> bool:
-    """
-    URLのみかどうかの判定
-    Slackの記法に従うため<>で囲まれている場合は除去する
-    """
     if is_contains_url(text):
         text = re.sub(r"<([^|>]+).*>$", "\\1", text)
         return parse_url(text) == extract_url(text)
@@ -54,20 +44,17 @@ def is_only_url(text: str) -> bool:
 
 
 def parse_url(url: str) -> str:
-    """URLをパースする"""
     url_obj: urllib.parse.ParseResult = urllib.parse.urlparse(url)
     path: str = urllib.parse.quote(url_obj.path, safe="=&%/")
     if url_obj.query is not None and url_obj.query != "":
-        query: str = urllib.parse.unquote(url_obj.query)
+        query: str = html.unescape(url_obj.query)
         path += f"?{query}"
     if url_obj.fragment is not None and url_obj.fragment != "":
         path += f"#{url_obj.fragment}"
-    print(f"{url_obj.scheme}://{url_obj.netloc}{path}")
     return f"{url_obj.scheme}://{url_obj.netloc}{path}"
 
 
 def extract_url(text: str) -> str:
-    """URLを抽出する"""
     links: list[str] = re.findall(_URL_PATTERN, text or "")
     if len(links) == 0:
         raise ValueError("URLが見つかりませんでした。")
@@ -75,8 +62,6 @@ def extract_url(text: str) -> str:
 
 
 def redirect_url(url: str) -> str:
-    """URLをリダイレクトする"""
-
     if url is None or url == "":
         raise ValueError("URLが見つかりませんでした。")
 
@@ -85,13 +70,14 @@ def redirect_url(url: str) -> str:
         Redirect(url="https://www.google.com/url", param="url"),
     ]
 
-    url_obj: urllib.parse.ParseResult = urllib.parse.urlparse(url)
-    path = f"{url_obj.scheme}://{url_obj.netloc}{url_obj.path}"
     canonical_url: str = url
-
+    url_obj: urllib.parse.ParseResult = urllib.parse.urlparse(url)
+    path: str = f"{url_obj.scheme}://{url_obj.netloc}{url_obj.path}"
     for redirect in redirect_urls:
         if path == redirect.url:
-            query_dict: dict = urllib.parse.parse_qs(url_obj.query)
+            query: str = urllib.parse.unquote(url_obj.query)
+            query = re.sub(";", "", query)
+            query_dict: dict = urllib.parse.parse_qs(query)
             if redirect.param in query_dict:
                 canonical_url = query_dict[redirect.param][0]
                 break
@@ -99,8 +85,6 @@ def redirect_url(url: str) -> str:
 
 
 def canonicalize_url(url: str) -> str:
-    """URLを正規化する"""
-
     if url is None or url == "":
         raise ValueError("URLが見つかりませんでした。")
     canonical_url: str = url
@@ -117,7 +101,6 @@ def canonicalize_url(url: str) -> str:
 
 
 def remove_tracking_query(url: str) -> str:
-    """トラッキングクエリを除去する"""
     if url is None:
         raise ValueError("URLが見つかりませんでした。")
     tracking_param: list[str] = [

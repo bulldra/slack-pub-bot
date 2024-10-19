@@ -1,7 +1,7 @@
-"""Slackからのイベント処理を行うためのサーバレス関数"""
 import json
 import logging
 import os
+import re
 
 import flask
 import functions_framework
@@ -10,7 +10,6 @@ import google.cloud.pubsub_v1
 import slack_bolt
 import slack_sdk.web
 
-import common.scraping_utils as scraping_utils
 import common.slack_gcf_handler as slack_gcf_handler
 import common.slack_link_utils as slack_link_utils
 
@@ -31,12 +30,11 @@ app: slack_bolt.App = slack_bolt.App(
 @app.event({"type": "message", "subtype": "message_changed"})
 @app.event({"type": "message", "subtype": "message_deleted"})
 def bot_message_change() -> None:
-    """メッセージイベントがあっても何もしない"""
+    pass
 
 
 @app.message()
 def handle_message(context, message) -> None:
-    """メッセージが送信された場合の処理。起動条件のみを判定して、コマンドの選択は後続に委譲"""
     share_cannel_id: str = str(SECRETS.get("SHARE_CHANNEL_ID"))
     if message.get("thread_ts") is not None:
         handle_thread(context.bot_user_id, message)
@@ -46,7 +44,6 @@ def handle_message(context, message) -> None:
 
 @app.event("app_mention")
 def mention(context, event) -> None:
-    """BOTに対してメンションがされた場合の処理。コマンドの選択は後続に委譲"""
     text: str = event.get("text")
     if text is not None:
         text = text.replace(f"<@{context.bot_user_id}>", "").strip()
@@ -59,11 +56,8 @@ def mention(context, event) -> None:
 
 @app.command("/gpt")
 @app.command("/summazise")
+@app.command("/idea")
 def handle_command(ack, command, say) -> None:
-    """
-    Slackのコマンドが実行された場合の処理
-    コマンドをメッセージとしてSlackにPOSTし、そのメッセージに対するスレッド処理とする
-    """
     ack()
     command_name: str = command.get("command")
     text: str = command.get("text")
@@ -79,8 +73,23 @@ def handle_command(ack, command, say) -> None:
     )
 
 
+@app.action(re.compile(r"^button-.+$"))
+def handle_button_action(ack, body) -> None:
+    ack()
+    logger.debug("button action: %s", str(body))
+    message_text: str = body["message"]["text"]
+    action: str = body["actions"][0].get("value")
+    pub_command(
+        channel=body["channel"]["id"],
+        thread_ts=body["message"]["ts"],
+        chat_history=[
+            {"role": "assistant", "content": message_text},
+            {"role": "user", "content": action},
+        ],
+    )
+
+
 def handle_thread(bot_user_id, message) -> None:
-    """スレッドリプライされている場合の処理。BOTがスレッド内にいればBOTが返信する"""
     channel: str = message.get("channel")
     thread_ts: str = message.get("thread_ts")
     replies: slack_sdk.web.SlackResponse = app.client.conversations_replies(
@@ -102,16 +111,14 @@ def handle_thread(bot_user_id, message) -> None:
 
 
 def handle_share(message) -> None:
-    """シェアチャンネルにスクレイピング可能なURLの投稿があった場合には処理対象とする"""
     text: str = message.get("text")
     if slack_link_utils.is_contains_url(text):
-        url: str = slack_link_utils.extract_and_remove_tracking_url(text)
-        if scraping_utils.is_allow_scraping(url):
-            pub_command(
-                channel=message.get("channel"),
-                thread_ts=message.get("ts"),
-                chat_history=[{"role": "user", "content": url}],
-            )
+        url: str = slack_link_utils.extract_url(text)
+        pub_command(
+            channel=message.get("channel"),
+            thread_ts=message.get("ts"),
+            chat_history=[{"role": "user", "content": url}],
+        )
 
 
 def pub_command(
@@ -120,7 +127,6 @@ def pub_command(
     thread_ts: str | None = None,
     chat_history: list[dict[str, str]] | None = None,
 ) -> None:
-    """該当メッセージにスレッドリプライを行い、そのリプライを後続で処理対象とする"""
     gcp_project_id: str = str(SECRETS.get("GCP_PROJECT_ID"))
     if gcp_project_id is None:
         raise ValueError("GCP_PROJECT_ID environment variable must be set.")
@@ -147,7 +153,7 @@ def pub_command(
             },
         }
     ]
-    res = app.client.chat_postMessage(
+    res: slack_sdk.web.SlackResponse = app.client.chat_postMessage(
         channel=channel,
         thread_ts=thread_ts,
         blocks=blocks,
@@ -177,5 +183,4 @@ def pub_command(
 
 @functions_framework.http
 def main(request: flask.Request):
-    """Functionsのエントリーポイント"""
     return slack_gcf_handler.handle(request, app)

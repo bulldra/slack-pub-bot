@@ -1,5 +1,8 @@
 source ./.env
 
+poetry update
+poetry export -f requirements.txt -o src/requirements.txt --without-hashes
+gcloud components update
 gcloud functions deploy ${FUNCTION_NAME} \
 	--gen2 \
 	--region=asia-northeast1 \
@@ -7,7 +10,7 @@ gcloud functions deploy ${FUNCTION_NAME} \
 	--trigger-http \
 	--allow-unauthenticated \
 	--timeout=3s \
-	--min-instances=1 \
+	--min-instances=0 \
 	--max-instances=30 \
 	--memory=256Mi \
 	--source=src/ \
