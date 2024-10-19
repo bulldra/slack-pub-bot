@@ -6,7 +6,7 @@ gcloud components update
 gcloud functions deploy ${FUNCTION_NAME} \
 	--gen2 \
 	--region=asia-northeast1 \
-	--runtime=python311 \
+	--runtime=python312 \
 	--trigger-http \
 	--allow-unauthenticated \
 	--timeout=3s \
