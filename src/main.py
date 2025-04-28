@@ -35,11 +35,17 @@ def bot_message_change() -> None:
 
 @app.message()
 def handle_message(context, message) -> None:
-    share_cannel_id: str = str(SECRETS.get("SHARE_CHANNEL_ID"))
     if message.get("thread_ts") is not None:
         handle_thread(context.bot_user_id, message)
-    elif context.channel_id == share_cannel_id:
+    elif context.channel_id == str(SECRETS["SHARE_CHANNEL_ID"]):
         handle_share(message)
+
+
+@app.event("message")
+def handle_file_share(context, event) -> None:
+    if event.get("subtype") == "file_share":
+        if context.channel_id == str(SECRETS["MAIL_CHANNEL_ID"]):
+            handle_mail(event)
 
 
 @app.event("app_mention")
@@ -118,6 +124,19 @@ def handle_share(message) -> None:
             channel=message.get("channel"),
             thread_ts=message.get("ts"),
             chat_history=[{"role": "user", "content": url}],
+        )
+
+
+def handle_mail(event) -> None:
+    if "files" in event:
+        mail = event.get("files")[0]
+        text = json.dumps(mail)
+
+        pub_command(
+            channel=event.get("channel"),
+            thread_ts=event.get("ts"),
+            command="/mail",
+            chat_history=[{"role": "user", "content": text}],
         )
 
 
