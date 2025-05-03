@@ -100,7 +100,9 @@ def handle_button_action(ack, body) -> None:
 @assistant.thread_started
 def handle_assistant_start(say, set_suggested_prompts):
     say("はいはい〜。どうしました？")
-    set_suggested_prompts(prompts=["記事をおすすめして", "なにかアイデアを出して"])
+    set_suggested_prompts(
+        prompts=["天気はどう？", "記事をおすすめして", "なにかアイデアを出して"]
+    )
 
 
 @assistant.user_message
