@@ -25,6 +25,8 @@ app: slack_bolt.App = slack_bolt.App(
     signing_secret=SECRETS.get("SLACK_SIGNING_SECRET"),
     request_verification_enabled=True,
 )
+assistant: slack_bolt.Assistant = slack_bolt.Assistant()
+app.use(assistant)
 
 
 @app.event({"type": "message", "subtype": "message_changed"})
@@ -95,6 +97,19 @@ def handle_button_action(ack, body) -> None:
     )
 
 
+@assistant.thread_started
+def handle_assistant_start(say, set_suggested_prompts):
+    say("はいはい〜。どうしました？")
+    set_suggested_prompts(prompts=["記事をおすすめして", "なにかアイデアを出して"])
+
+
+@assistant.user_message
+def handle_assistant_message(message, context, set_status):
+    logger.debug("assistant message: %s", str(message))
+    set_status("is typing...")
+    handle_thread(context.bot_user_id, message)
+
+
 def handle_thread(bot_user_id, message) -> None:
     channel: str = message.get("channel")
     thread_ts: str = message.get("thread_ts")
@@ -157,8 +172,8 @@ def pub_command(
         thread_ts,
         chat_history,
     )
-    if thread_ts is None or channel is None:
-        raise ValueError("thread_ts and channel must be set.")
+    if channel is None:
+        raise ValueError("channel must be set.")
     if chat_history is None or len(chat_history) == 0:
         raise ValueError("chat_history must be set.")
 
@@ -172,11 +187,17 @@ def pub_command(
             },
         }
     ]
-    res: slack_sdk.web.SlackResponse = app.client.chat_postMessage(
-        channel=channel,
-        thread_ts=thread_ts,
-        blocks=blocks,
-    )
+    if thread_ts is None:
+        res: slack_sdk.web.SlackResponse = app.client.chat_postMessage(
+            channel=channel,
+            blocks=blocks,
+        )
+    else:
+        res: slack_sdk.web.SlackResponse = app.client.chat_postMessage(
+            channel=channel,
+            thread_ts=thread_ts,
+            blocks=blocks,
+        )
     if res.get("ok") is not True:
         raise ValueError("Failed to post message.")
 
