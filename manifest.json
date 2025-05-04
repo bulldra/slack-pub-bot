@@ -1,0 +1,72 @@
+{
+	"display_information": {
+		"name": "lambda - sigma",
+		"description": "AIアシスタンツ",
+		"background_color": "#2c2d30"
+	},
+	"features": {
+		"app_home": {
+			"home_tab_enabled": false,
+			"messages_tab_enabled": true,
+			"messages_tab_read_only_enabled": false
+		},
+		"bot_user": {
+			"display_name": "lambda - sigma",
+			"always_online": true
+		},
+		"assistant_view": {
+			"assistant_description": "",
+			"suggested_prompts": []
+		}
+	},
+	"oauth_config": {
+		"scopes": {
+			"user": [
+				"search:read",
+				"channels:history",
+				"groups:history",
+				"im:history",
+				"mpim:history",
+				"reactions:read",
+				"links:read",
+				"links:write",
+				"links.embed:write"
+			],
+			"bot": [
+				"app_mentions:read",
+				"assistant:write",
+				"channels:history",
+				"chat:write",
+				"commands",
+				"files:read",
+				"files:write",
+				"groups:history",
+				"im:history",
+				"links.embed:write",
+				"links:read",
+				"links:write",
+				"mpim:history",
+				"users:read",
+				"bookmarks:read",
+				"bookmarks:write"
+			]
+		}
+	},
+	"settings": {
+		"event_subscriptions": {
+			"bot_events": [
+				"app_mention",
+				"assistant_thread_context_changed",
+				"assistant_thread_started",
+				"message.channels",
+				"message.im"
+			]
+		},
+		"interactivity": {
+			"is_enabled": true
+		},
+		"org_deploy_enabled": false,
+		"socket_mode_enabled": false,
+		"token_rotation_enabled": false
+	}
+}
