@@ -10,7 +10,7 @@ DEPLOY_OUTPUT=$(gcloud functions deploy ${FUNCTION_NAME} \
 	--trigger-http \
 	--allow-unauthenticated \
 	--timeout=3s \
-	--min-instances=0 \
+	--min-instances=1 \
 	--max-instances=30 \
 	--memory=256Mi \
 	--source=src/ \
@@ -26,3 +26,4 @@ else
 	echo "Deployment failed for ${FUNCTION_NAME}."
 	echo "Error: ${ERROR_MESSAGE}"
 fi
+date

@@ -1,7 +1,8 @@
-import datetime
 import json
 import random
+from datetime import datetime
 from typing import List
+from zoneinfo import ZoneInfo
 
 
 def get_assistant_greeting_and_prompts() -> tuple[str, List[str]]:
@@ -13,7 +14,9 @@ def get_assistant_greeting_and_prompts() -> tuple[str, List[str]]:
         conf = {}
 
     greetings = conf.get("greetings", {})
-    now = datetime.datetime.now()
+
+    tz = ZoneInfo("Asia/Tokyo")
+    now = datetime.now(tz) if tz else datetime.now()
     weekday = now.strftime("%A")
     hour = now.hour
     hour_range = f"{(hour // 3) * 3}-{((hour // 3) + 1) * 3}"
