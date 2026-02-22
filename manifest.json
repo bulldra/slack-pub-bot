@@ -15,29 +15,30 @@
 			"always_online": true
 		},
 		"assistant_view": {
-			"assistant_description": "",
+			"assistant_description": "サイバー猫耳アシスタント & スマートフォン型使い魔",
 			"suggested_prompts": []
 		}
 	},
 	"oauth_config": {
 		"scopes": {
 			"user": [
-				"search:read",
 				"channels:history",
 				"groups:history",
 				"im:history",
-				"mpim:history",
-				"reactions:read",
+				"links.embed:write",
 				"links:read",
 				"links:write",
-				"links.embed:write"
+				"mpim:history",
+				"reactions:read",
+				"search:read"
 			],
 			"bot": [
 				"app_mentions:read",
 				"assistant:write",
+				"bookmarks:read",
+				"bookmarks:write",
 				"channels:history",
 				"chat:write",
-				"commands",
 				"files:read",
 				"files:write",
 				"groups:history",
@@ -47,23 +48,26 @@
 				"links:write",
 				"mpim:history",
 				"users:read",
-				"bookmarks:read",
-				"bookmarks:write"
+				"reactions:read",
+				"reactions:write"
 			]
 		}
 	},
 	"settings": {
 		"event_subscriptions": {
+			"request_url": "https://asia-northeast1-radiant-voyage-325608.cloudfunctions.net/chat",
 			"bot_events": [
 				"app_mention",
 				"assistant_thread_context_changed",
 				"assistant_thread_started",
 				"message.channels",
-				"message.im"
+				"message.im",
+				"reaction_added"
 			]
 		},
 		"interactivity": {
-			"is_enabled": true
+			"is_enabled": true,
+			"request_url": "https://asia-northeast1-radiant-voyage-325608.cloudfunctions.net/chat"
 		},
 		"org_deploy_enabled": false,
 		"socket_mode_enabled": false,

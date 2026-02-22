@@ -2,12 +2,14 @@ import json
 import logging
 import os
 import re
-from typing import List
+from typing import Any
 
 import flask
 import functions_framework
+import google.auth.transport.requests
 import google.cloud.logging
 import google.cloud.pubsub_v1
+import google.oauth2.id_token
 import slack_bolt
 import slack_sdk.web
 
@@ -15,7 +17,11 @@ import module.slack_assistant as slack_assistant
 import module.slack_gcf_handler as slack_gcf_handler
 import module.slack_link_utils as slack_link_utils
 
-SECRETS: dict = json.loads(str(os.getenv("SECRETS")))
+if os.getenv("SECRETS"):
+    SECRETS: dict[str, Any] = json.loads(str(os.getenv("SECRETS")))
+else:
+    raise ValueError("SECRETS environment variable is not set")
+URL_PATTERN: str = r"https?://[a-zA-Z0-9_/:%#\$&;\?\(\)~\.=\+\-]+[^\s\|\>]+"
 
 logging_client: google.cloud.logging.Client = google.cloud.logging.Client()
 logging_client.setup_logging()
@@ -31,6 +37,54 @@ assistant: slack_bolt.Assistant = slack_bolt.Assistant()
 app.use(assistant)
 
 
+@app.event("reaction_added")
+def handle_reaction_added(event: dict[str, Any]):
+    logger.info(
+        "reaction_added: reaction=%s, channel=%s, ts=%s, user=%s",
+        event.get("reaction"),
+        event.get("item", {}).get("channel"),
+        event.get("item", {}).get("ts"),
+        event.get("user"),
+    )
+    if event["reaction"] != SECRETS.get("REACTION_EMOJI"):
+        logger.info(
+            "reaction skipped: expected=%s, actual=%s",
+            SECRETS.get("REACTION_EMOJI"),
+            event["reaction"],
+        )
+        return
+
+    result: slack_sdk.web.SlackResponse = app.client.conversations_history(
+        channel=event["item"]["channel"],
+        inclusive=True,
+        latest=event["item"]["ts"],
+        limit=1,
+    )
+    message_text: str | None = (
+        result["messages"][0].get("text") if result["messages"] else None
+    )
+    logger.info("reaction target message: %s", message_text)
+    if message_text is None:
+        logger.info("reaction target message is empty")
+        return
+    link: str = slack_link_utils.extract_and_remove_tracking_url(message_text)
+    logger.info("share_link: %s", link)
+    if link is not None:
+        share_channel: str = str(SECRETS.get("SHARE_CHANNEL_ID"))
+        res: slack_sdk.web.SlackResponse = app.client.chat_postMessage(
+            channel=share_channel,
+            text=link,
+            unfurl_links=True,
+        )
+        logger.info("reaction shared: link=%s, channel=%s", link, share_channel)
+        pub_command(
+            channel=share_channel,
+            thread_ts=res.get("ts"),
+            user_id=event.get("user"),
+            chat_history=[{"role": "user", "content": link}],
+        )
+
+
 @app.event({"type": "message", "subtype": "message_changed"})
 @app.event({"type": "message", "subtype": "message_deleted"})
 def bot_message_change() -> None:
@@ -41,7 +95,7 @@ def bot_message_change() -> None:
 def handle_message(context, event, message) -> None:
     if message.get("thread_ts") is not None:
         handle_thread(context.bot_user_id, event["user"], message)
-    elif context.channel_id == str(SECRETS["SHARE_CHANNEL_ID"]):
+    else:
         handle_share(event.get("user"), message)
 
 
@@ -65,26 +119,6 @@ def mention(context, event) -> None:
         )
 
 
-@app.command("/gpt")
-@app.command("/summazise")
-@app.command("/idea")
-def handle_command(ack, command, say, event) -> None:
-    ack()
-    command_name: str = command.get("command")
-    text: str = command.get("text")
-    message = command_name
-    if text is not None:
-        message += f" {text}"
-    res = say(message)
-    pub_command(
-        command=command_name,
-        channel=res.get("channel"),
-        thread_ts=res.get("ts"),
-        user_id=event.get("user"),
-        chat_history=[{"role": "user", "content": text}],
-    )
-
-
 @app.action(re.compile(r"^button-.+$"))
 def handle_button_action(ack, body) -> None:
     ack()
@@ -104,14 +138,14 @@ def handle_button_action(ack, body) -> None:
 
 @assistant.thread_started
 def handle_assistant_start(say, set_suggested_prompts):
-    greeting, prompts = slack_assistant.get_assistant_greeting_and_prompts()
-    say(greeting)
+    assist = slack_assistant.SlackAssistant()
+    greeting, prompts = assist.get_assistant_greeting_and_prompts()
     set_suggested_prompts(prompts=prompts)
+    say(greeting)
 
 
 @assistant.user_message
-def handle_assistant_message(message, context, set_status):
-    set_status("is typing...")
+def handle_assistant_message(message, context):
     handle_thread(context.bot_user_id, message.get("user"), message)
 
 
@@ -123,7 +157,9 @@ def handle_thread(bot_user_id, user_id, message) -> None:
         ts=thread_ts,
     )
     if replies is not None:
-        reply_messages: List[dict] = replies["messages"]
+        reply_messages: list[dict] = replies["messages"]
+        if not reply_messages:
+            return
         reply_users = reply_messages[0].get("reply_users")
         if reply_users is not None and bot_user_id in reply_users:
             chat_history: list[dict[str, str]] = []
@@ -133,10 +169,7 @@ def handle_thread(bot_user_id, user_id, message) -> None:
                     role = "assistant"
                 content: str = reply["text"]
                 user_id = reply.get("user")
-                if user_id:
-                    chat_history.append({"role": role, "content": content})
-                else:
-                    chat_history.append({"role": role, "content": content})
+                chat_history.append({"role": role, "content": content})
             pub_command(
                 channel=channel,
                 thread_ts=thread_ts,
@@ -147,13 +180,13 @@ def handle_thread(bot_user_id, user_id, message) -> None:
 
 def handle_share(user_id, message) -> None:
     text: str = message.get("text")
-    if slack_link_utils.is_contains_url(text):
-        url: str = slack_link_utils.extract_url(text)
+    links: list[str] = re.findall(URL_PATTERN, text or "")
+    if len(links) > 0:
         pub_command(
             channel=message.get("channel"),
             thread_ts=message.get("ts"),
             user_id=user_id,
-            chat_history=[{"role": "user", "content": url}],
+            chat_history=[{"role": "user", "content": text}],
         )
 
 
@@ -161,7 +194,6 @@ def handle_mail(event) -> None:
     if "files" in event:
         mail = event.get("files")[0]
         text = json.dumps(mail)
-
         pub_command(
             channel=event.get("channel"),
             thread_ts=event.get("ts"),
@@ -171,21 +203,44 @@ def handle_mail(event) -> None:
         )
 
 
+def _publish_to_pubsub(
+    command: str | None = None,
+    channel: str | None = None,
+    ts: str | None = None,
+    user_id: str | None = None,
+    thread_ts: str | None = None,
+    processing_message: str | None = None,
+    chat_history: list[dict[str, str]] | None = None,
+) -> None:
+    gcp_project_id: str = str(SECRETS.get("GCP_PROJECT_ID"))
+    publisher: google.cloud.pubsub_v1.PublisherClient = (
+        google.cloud.pubsub_v1.PublisherClient()
+    )
+    publisher.publish(
+        publisher.topic_path(gcp_project_id, "slack-ai-chat"),
+        data=json.dumps(
+            {
+                "context": {
+                    "command": command,
+                    "channel": channel,
+                    "ts": ts,
+                    "user_id": user_id,
+                    "thread_ts": thread_ts,
+                    "processing_message": processing_message,
+                },
+                "chat_history": chat_history,
+            }
+        ).encode("utf-8"),
+    )
+
+
 def pub_command(
     command: str | None = None,
     channel: str | None = None,
     thread_ts: str | None = None,
     user_id: str | None = None,
-    chat_history: List[dict[str, str]] | None = None,
+    chat_history: list[dict[str, str]] | None = None,
 ) -> None:
-    secrets_raw: str = str(os.getenv("SECRETS"))
-    if not secrets_raw:
-        raise RuntimeError("SECRETS 環境変数が設定されていません")
-    secrets: dict[str, any] = json.loads(secrets_raw)
-    gcp_project_id: str = str(secrets.get("GCP_PROJECT_ID"))
-    if gcp_project_id is None:
-        raise ValueError("GCP_PROJECT_ID environment variable must be set.")
-
     logger.debug(
         "command: %s, channel: %s, thread_ts: %s, user_id: %s, \nchat_history: %s",
         command,
@@ -200,16 +255,20 @@ def pub_command(
         raise ValueError("chat_history must be set.")
 
     prosessing_message: str = "思考中."
-    blocks: List = [
-        {"type": "section", "text": {"type": "mrkdwn", "text": prosessing_message}}
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": prosessing_message},
+        }
     ]
+    res: slack_sdk.web.SlackResponse
     if thread_ts is None:
-        res: slack_sdk.web.SlackResponse = app.client.chat_postMessage(
+        res = app.client.chat_postMessage(
             channel=channel,
             blocks=blocks,
         )
     else:
-        res: slack_sdk.web.SlackResponse = app.client.chat_postMessage(
+        res = app.client.chat_postMessage(
             channel=channel,
             thread_ts=thread_ts,
             blocks=blocks,
@@ -217,27 +276,65 @@ def pub_command(
     if res.get("ok") is not True:
         raise ValueError("Failed to post message.")
 
-    publisher: google.cloud.pubsub_v1.PublisherClient = (
-        google.cloud.pubsub_v1.PublisherClient()
+    _publish_to_pubsub(
+        command=command,
+        channel=channel,
+        ts=res.get("ts"),
+        user_id=user_id,
+        thread_ts=thread_ts,
+        processing_message=prosessing_message,
+        chat_history=chat_history,
     )
-    publisher.publish(
-        publisher.topic_path(gcp_project_id, "slack-ai-chat"),
-        data=json.dumps(
+
+
+def _verify_scheduler_token(request: flask.Request) -> bool:
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return False
+    token = auth_header.split("Bearer ")[1]
+    try:
+        google.oauth2.id_token.verify_oauth2_token(
+            token,
+            google.auth.transport.requests.Request(),
+        )
+        return True
+    except Exception:
+        return False
+
+
+def handle_feed_digest(request: flask.Request) -> tuple[str, int]:
+    if not _verify_scheduler_token(request):
+        logger.warning("Unauthorized feed_digest request")
+        return ("Unauthorized", 403)
+
+    logger.info("feed_digest scheduled command received")
+    feed_channel: str = str(SECRETS.get("FEED_DIGEST_CHANNEL_ID"))
+    processing_message: str = "フィードダイジェストを生成中."
+    res: slack_sdk.web.SlackResponse = app.client.chat_postMessage(
+        channel=feed_channel,
+        blocks=[
             {
-                "context": {
-                    "command": command,
-                    "channel": channel,
-                    "ts": res.get("ts"),
-                    "user_id": user_id,
-                    "thread_ts": thread_ts,
-                    "processing_message": prosessing_message,
-                },
-                "chat_history": chat_history,
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": processing_message},
             }
-        ).encode("utf-8"),
+        ],
     )
+    if res.get("ok") is not True:
+        logger.error("Failed to post feed_digest processing message")
+        return ("Failed to post message", 500)
+
+    _publish_to_pubsub(
+        command="/feed_digest",
+        channel=feed_channel,
+        ts=res.get("ts"),
+        processing_message=processing_message,
+        chat_history=[{"role": "user", "content": "/feed_digest"}],
+    )
+    return ("OK", 200)
 
 
 @functions_framework.http
 def main(request: flask.Request):
+    if request.path == "/feed_digest" and request.method == "POST":
+        return handle_feed_digest(request)
     return slack_gcf_handler.handle(request, app)
