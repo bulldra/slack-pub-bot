@@ -2,7 +2,18 @@ source ./.env
 
 uv pip compile pyproject.toml -o src/requirements.txt
 gcloud -q components update
-gcloud secrets versions add PUB_SLACK_SECRETS --data-file=secrets.json --project=radiant-voyage-325608
+SECRET_NAME="PUB_SLACK_SECRETS"
+gcloud secrets versions add "${SECRET_NAME}" --data-file=secrets.json --project=radiant-voyage-325608
+
+# 最新バージョン以外を削除（コスト削減）
+ALL_VERSIONS=$(gcloud secrets versions list "${SECRET_NAME}" --filter="state=enabled" --format="value(name)" | sort -n)
+LATEST_VERSION=$(echo "${ALL_VERSIONS}" | tail -n 1)
+OLD_VERSIONS=$(echo "${ALL_VERSIONS}" | grep -v "^${LATEST_VERSION}$")
+if [ -n "${OLD_VERSIONS}" ]; then
+    echo "Destroying old secret versions: ${OLD_VERSIONS}"
+    echo "${OLD_VERSIONS}" | xargs -I{} gcloud secrets versions destroy {} --secret="${SECRET_NAME}" --quiet
+fi
+
 DEPLOY_OUTPUT=$(gcloud functions deploy ${FUNCTION_NAME} \
 	--gen2 \
 	--region=asia-northeast1 \
