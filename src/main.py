@@ -293,10 +293,13 @@ def _verify_scheduler_token(request: flask.Request) -> bool:
         return False
     token = auth_header.split("Bearer ")[1]
     try:
-        google.oauth2.id_token.verify_oauth2_token(
+        claims = google.oauth2.id_token.verify_oauth2_token(
             token,
             google.auth.transport.requests.Request(),
         )
+        expected_account = SECRETS.get("SCHEDULER_SERVICE_ACCOUNT")
+        if expected_account and claims.get("email") != expected_account:
+            return False
         return True
     except Exception:
         return False
